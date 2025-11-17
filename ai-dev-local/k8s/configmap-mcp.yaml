@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cursor-mcp
+  namespace: ai-dev
+data:
+  mcp.json: |
+    {
+      "mcpServers": {
+        "github": {
+          "command": "npx",
+          "args": ["-y", "mcp-github"],
+          "env": { "GITHUB_TOKEN": "${GH_TOKEN}" }
+        },
+        "jira": {
+          "command": "node",
+          "args": ["./jira-mcp/dist/server.js"],
+          "env": {
+            "JIRA_BASE": "${JIRA_BASE}",
+            "JIRA_EMAIL": "${JIRA_EMAIL}",
+            "JIRA_API_TOKEN": "${JIRA_TOKEN}"
+          }
+        }
+      }
+    }
+

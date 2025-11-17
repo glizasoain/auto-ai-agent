@@ -1,0 +1,55 @@
+version: 1.0.0
+last_updated: "2025-11-14"
+contact: "autonomous-agent-team@example.com"
+scope:
+  description: >
+    Guardrails for the autonomous Aider agent. These rules apply to every automated
+    run launched via Prefect/Kubernetes. They are not intended for manual local use.
+constraints:
+  - id: issue-selection
+    description: Only work on Jira issues labeled AI_ALLOWED and Ready for Dev.
+    enforcement: prompt
+  - id: branch-naming
+    description: Branch names must follow ai/{issueKey}-{slug} (e.g., ai/PAY-123-payment-bug).
+    enforcement: prompt
+  - id: forbidden-dirs
+    description: Do not read or write files under infra/** or secrets/**.
+    enforcement: prompt|read-only
+  - id: testing-required
+    description: Must add or modify automated tests when changing code paths.
+    enforcement: prompt|post-command
+  - id: tests-pass
+    description: All test commands must pass before preparing a PR.
+    enforcement: post-command
+  - id: pr-link
+    description: PR body must summarize changes and link the Jira ticket.
+    enforcement: prompt
+work_items:
+  jira_issue:
+    summary_prompt: >
+      Work on the assigned Jira issue using the injected ISSUE_KEY and ISSUE_SUMMARY.
+      Follow all guardrails, create the ai/{issueKey}-{slug} branch, implement changes,
+      add/modify tests, run test suite, summarize work, and prepare a PR body linking the Jira issue.
+forbidden_paths:
+  - "infra/**"
+  - "secrets/**"
+required_steps:
+  - id: read-ticket
+    description: Read the Jira ticket and acceptance criteria before coding.
+  - id: plan
+    description: Produce a plan summary before making changes.
+  - id: implement
+    description: Implement code changes respecting guardrails.
+  - id: test
+    description: Run automated tests and ensure they pass.
+  - id: pr-summary
+    description: Draft PR body summarizing changes and linking Jira ticket.
+post_run:
+  default_command: ""
+  notes: >
+    Set POST_RUN_COMMAND in the Kubernetes secret to enforce specific test commands
+    (e.g., npm test, pytest). If left empty, no additional command is run after Aider.
+future_extensions:
+  - metadata: Additional constraints (dependency boundaries, code owners) can be added under constraints[].
+  - enforcement: Runner may parse this file programmatically to set read-only paths or default commands.
+

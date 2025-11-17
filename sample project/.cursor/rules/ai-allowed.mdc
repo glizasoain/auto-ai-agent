@@ -1,0 +1,8 @@
+# AI Allowed Guardrails
+
+- Pick issues only when labeled `AI_ALLOWED` and `Ready for Dev`.
+- Branch names: `ai/{ISSUE_KEY}-{slug}`.
+- Directories `infra/**` and `secrets/**` are read-only.
+- Add or update automated tests when touching executable code.
+- Run `pytest` and ensure green before PR prep.
+- Draft PR body with summary + Jira link.

@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cursor-rules
+  namespace: ai-dev
+data:
+  ai-allowed.mdc: |
+    ---
+    description: Cursor agent guardrails for autonomous development.
+    alwaysApply: true
+    ---
+    # Constraints
+    - Only work on Jira issues labeled AI_ALLOWED and Ready for Dev.
+    - Branch name: ai/@{issueKey}-@{slug}
+    - Forbidden directories: infra/**, secrets/**
+    - Must add/modify tests.
+    - Must pass all tests before PR creation.
+
+    # Steps
+    1) Read ticket and acceptance criteria.
+    2) Plan and summarize changes in PR body.
+    3) Implement changes and run tests.
+    4) Open PR linking Jira ticket.
+    5) Respond to review feedback until approved.
+

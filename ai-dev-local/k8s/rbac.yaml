@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: job-launcher
+  namespace: ai-dev
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: job-manager
+  namespace: ai-dev
+rules:
+  - apiGroups: ["", "batch"]
+    resources: ["pods", "pods/log", "jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: job-manager-binding
+  namespace: ai-dev
+subjects:
+  - kind: ServiceAccount
+    name: job-launcher
+    namespace: ai-dev
+roleRef:
+  kind: Role
+  name: job-manager
+  apiGroup: rbac.authorization.k8s.io
+
