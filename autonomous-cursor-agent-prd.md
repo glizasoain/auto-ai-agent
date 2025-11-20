@@ -141,6 +141,12 @@ roleRef:
 
 **File:** `flows/cursor_flow.py`
 
+Key responsibilities now include:
+
+- Query Jira (`status = "Ready for Development"` and label `AI_ALLOWED` by default) using the bot credentials provided in `aider-secrets`.
+- Parse the issue description, extract the GitHub repository URL (teams include `Repo: https://github.com/org/repo` in the ticket body), and pass that to the runner as `REPO_URL`.
+- Inject the selected issue key, summary, repo URL, and base branch into the Kubernetes Job environment.
+
 ```python
 from prefect import flow, task, get_run_logger
 from prefect_kubernetes import KubernetesJob

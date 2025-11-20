@@ -19,20 +19,36 @@ cd repo
 
 ISSUE_KEY=${ISSUE_KEY:-"UNKNOWN"}
 ISSUE_SUMMARY=${ISSUE_SUMMARY:-"No summary provided"}
+EXISTING_PR_NUMBER=${PR_NUMBER:-""}
 
 slugify() {
-  echo "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed -E 's/^-+//; s/-+$//'
+  local text
+  text=$(echo "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed -E 's/^-+//; s/-+$//')
+  echo "${text:0:40}"
 }
 
-SUMMARY_SLUG=$(slugify "${ISSUE_SUMMARY}")
-SUMMARY_SLUG=${SUMMARY_SLUG:-update}
-BRANCH_NAME="ai/${ISSUE_KEY}-${SUMMARY_SLUG}"
-
 BASE_BRANCH=${BASE_BRANCH:-"main"}
+if [ -z "${BRANCH_NAME:-}" ]; then
+  SUMMARY_SLUG=$(slugify "${ISSUE_SUMMARY}")
+  SUMMARY_SLUG=${SUMMARY_SLUG:-update}
+  RUN_ID=$(date -u +"%Y%m%d%H%M%S" | tail -c 7)
+  BRANCH_NAME="ai/${ISSUE_KEY}/${SUMMARY_SLUG}-${RUN_ID}"
+  echo "[runner] Creating new branch ${BRANCH_NAME}"
+else
+  echo "[runner] Reusing provided branch ${BRANCH_NAME}"
+fi
+
 export BRANCH_NAME BASE_BRANCH ISSUE_KEY ISSUE_SUMMARY
 
-echo "[runner] Checking out branch ${BRANCH_NAME}"
-git checkout -B "${BRANCH_NAME}"
+git fetch origin "${BASE_BRANCH}" --depth=1
+if git ls-remote --exit-code origin "refs/heads/${BRANCH_NAME}" >/dev/null 2>&1; then
+  echo "[runner] Branch ${BRANCH_NAME} exists on origin; checking out."
+  git fetch origin "${BRANCH_NAME}:${BRANCH_NAME}"
+  git checkout "${BRANCH_NAME}"
+else
+  echo "[runner] Branch ${BRANCH_NAME} does not exist; creating from ${BASE_BRANCH}."
+  git checkout -B "${BRANCH_NAME}" "origin/${BASE_BRANCH}"
+fi
 
 RUN_PROMPT="Work on Jira issue ${ISSUE_KEY}: ${ISSUE_SUMMARY}. Follow .cursor/rules (and guardrails.yaml), implement the necessary changes, add/modify tests, run tests, summarize work, and prepare a PR body linking the Jira issue. Branch to ${BRANCH_NAME}."
 
@@ -61,29 +77,50 @@ if [ -n "${POST_RUN_COMMAND:-}" ]; then
   bash -lc "${POST_RUN_COMMAND}"
 fi
 
-if git diff --quiet; then
-  echo "[runner] No changes detected; skipping commit/push."
+git add -A
+if git diff --cached --quiet; then
+  echo "[runner] No newly staged changes; assuming Aider already committed."
 else
-  git add -A
   COMMIT_MSG="AI work for ${ISSUE_KEY}: ${ISSUE_SUMMARY}"
   git commit -m "${COMMIT_MSG}"
-  git push origin "${BRANCH_NAME}"
-  echo "[runner] Changes committed and pushed to ${BRANCH_NAME}"
+fi
 
-  REPO_SLUG=${REPO_URL#https://github.com/}
-  REPO_SLUG=${REPO_SLUG%.git}
-  REPO_OWNER=${REPO_SLUG%%/*}
+git push -u origin "${BRANCH_NAME}"
+echo "[runner] Branch ${BRANCH_NAME} pushed to origin."
 
-  echo "[runner] Checking for existing PR..."
-  existing_pr=$(curl -sS \
-    -H "Authorization: token ${GH_TOKEN}" \
-    -H "Accept: application/vnd.github+json" \
-    "https://api.github.com/repos/${REPO_SLUG}/pulls?head=${REPO_OWNER}:${BRANCH_NAME}")
+REPO_SLUG=${REPO_URL#https://github.com/}
+REPO_SLUG=${REPO_SLUG%.git}
+REPO_OWNER=${REPO_SLUG%%/*}
+export REPO_SLUG
 
-  if echo "${existing_pr}" | grep -q "\"head\""; then
-    echo "[runner] PR already exists for ${BRANCH_NAME}, skipping creation."
-  else
-    PR_PAYLOAD=$(python3 - <<'PY'
+FINAL_PR_NUMBER=""
+FINAL_PR_URL=""
+
+echo "[runner] Checking for existing PR..."
+existing_pr=$(curl -sS \
+  -H "Authorization: token ${GH_TOKEN}" \
+  -H "Accept: application/vnd.github+json" \
+  "https://api.github.com/repos/${REPO_SLUG}/pulls?head=${REPO_OWNER}:${BRANCH_NAME}")
+
+existing_summary=$(printf '%s\n' "${existing_pr}" | python3 - <<'PY'
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except json.JSONDecodeError:
+    sys.exit(0)
+if not isinstance(data, list) or not data:
+    sys.exit(0)
+pr = data[0]
+print(f"{pr['number']} {pr['html_url']}")
+PY
+)
+
+if [ -n "${existing_summary}" ]; then
+  FINAL_PR_NUMBER=$(echo "${existing_summary}" | awk '{print $1}')
+  FINAL_PR_URL=$(echo "${existing_summary}" | awk '{print $2}')
+  echo "[runner] PR already exists for ${BRANCH_NAME}: ${FINAL_PR_URL}"
+else
+  PR_PAYLOAD=$(python3 - <<'PY'
 import json, os
 title = f"AI work for {os.environ.get('ISSUE_KEY', 'UNKNOWN')}: {os.environ.get('ISSUE_SUMMARY', 'No summary provided')}"
 body = """## Summary
@@ -103,22 +140,40 @@ print(json.dumps(payload))
 PY
 )
 
-    echo "[runner] Creating draft PR targeting ${BASE_BRANCH}..."
-    response=$(curl -sS -X POST \
-      -H "Authorization: token ${GH_TOKEN}" \
-      -H "Accept: application/vnd.github+json" \
-      https://api.github.com/repos/${REPO_SLUG}/pulls \
-      -d "${PR_PAYLOAD}")
+  echo "[runner] Creating draft PR targeting ${BASE_BRANCH}..."
+  response=$(curl -sS -X POST \
+    -H "Authorization: token ${GH_TOKEN}" \
+    -H "Accept: application/vnd.github+json" \
+    https://api.github.com/repos/${REPO_SLUG}/pulls \
+    -d "${PR_PAYLOAD}")
 
-    if echo "${response}" | grep -q '"html_url"'; then
-      pr_url=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin)['html_url'])")
-      echo "[runner] Draft PR created: ${pr_url}"
-    else
-      echo "[runner] Failed to create PR. Response:"
-      echo "${response}"
-    fi
+  if echo "${response}" | grep -q '"html_url"'; then
+    FINAL_PR_NUMBER=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin)['number'])")
+    FINAL_PR_URL=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin)['html_url'])")
+    echo "[runner] Draft PR created: ${FINAL_PR_URL}"
+  else
+    echo "[runner] Failed to create PR. Response:"
+    echo "${response}"
   fi
 fi
+
+RUNNER_RESULT=$(python3 - <<'PY'
+import json, os
+result = {
+    "issue_key": os.environ.get("ISSUE_KEY", "UNKNOWN"),
+    "branch_name": os.environ.get("BRANCH_NAME"),
+    "repo_slug": os.environ.get("REPO_SLUG"),
+}
+pr_number = os.environ.get("FINAL_PR_NUMBER")
+pr_url = os.environ.get("FINAL_PR_URL")
+if pr_number:
+    result["pr_number"] = int(pr_number)
+if pr_url:
+    result["pr_url"] = pr_url
+print(json.dumps(result))
+PY
+)
+echo "::runner-result::${RUNNER_RESULT}"
 
 echo "[runner] Completed successfully."
 

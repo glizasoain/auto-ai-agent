@@ -1,0 +1,14 @@
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    issue_key VARCHAR(64) NOT NULL UNIQUE,
+    issue_summary VARCHAR(512),
+    repo_url VARCHAR(512) NOT NULL,
+    branch_name VARCHAR(256),
+    pr_number INT,
+    status VARCHAR(32) NOT NULL DEFAULT 'new',
+    metadata JSON NULL,
+    last_runner_id VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
