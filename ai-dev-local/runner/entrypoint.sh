@@ -227,7 +227,27 @@ if [ "${PERSIST_SESSION}" = "true" ]; then
   SESSION_FLAGS+=(--restore "${SESSION_FILE}" --save "${SESSION_FILE}")
 fi
 
-# Layer 4: Use Aider's --exclude to prevent editing guardrails and rules files
+# Layer 4: Make guardrails files read-only to prevent modification
+# Find and protect guardrails.yaml and .cursor/rules files
+PROTECTED_FILES=()
+if [ -f "guardrails.yaml" ]; then
+  chmod a-w "guardrails.yaml" 2>/dev/null || true
+  PROTECTED_FILES+=("guardrails.yaml")
+  echo "[runner] Protected guardrails.yaml (read-only)"
+fi
+if [ -d ".cursor/rules" ]; then
+  find .cursor/rules -type f -exec chmod a-w {} \; 2>/dev/null || true
+  PROTECTED_FILES+=(".cursor/rules")
+  echo "[runner] Protected .cursor/rules files (read-only)"
+fi
+if [ -d ".cursor" ]; then
+  find .cursor -name "*.yaml" -o -name "*.yml" -o -name "*.mdc" | while read -r f; do
+    chmod a-w "$f" 2>/dev/null || true
+  done
+  echo "[runner] Protected .cursor config files (read-only)"
+fi
+
+# Use Aider's --exclude as additional protection
 aider \
   --model "${DEFAULT_MODEL}" \
   "${SESSION_FLAGS[@]}" \
@@ -237,6 +257,44 @@ aider \
   --exclude ".cursor/rules/**" \
   --exclude ".cursor/**" \
   --message "${RUN_PROMPT}"
+
+# Check if protected files were modified and restore them from git
+echo "[runner] Checking for unauthorized modifications to protected files..."
+if [ -f "guardrails.yaml" ]; then
+  if ! git diff --quiet "guardrails.yaml" 2>/dev/null; then
+    echo "[runner] WARNING: guardrails.yaml was modified! Restoring from git..."
+    git checkout HEAD -- "guardrails.yaml" 2>/dev/null || git restore "guardrails.yaml" 2>/dev/null || true
+    echo "[runner] Restored guardrails.yaml to original state"
+  fi
+fi
+if [ -d ".cursor/rules" ]; then
+  if ! git diff --quiet ".cursor/rules" 2>/dev/null; then
+    echo "[runner] WARNING: .cursor/rules was modified! Restoring from git..."
+    git checkout HEAD -- ".cursor/rules" 2>/dev/null || git restore ".cursor/rules" 2>/dev/null || true
+    echo "[runner] Restored .cursor/rules to original state"
+  fi
+fi
+if [ -d ".cursor" ]; then
+  # Check for any .yaml, .yml, or .mdc files in .cursor that were modified
+  git diff --name-only ".cursor" 2>/dev/null | grep -E '\.(yaml|yml|mdc)$' | while read -r file; do
+    if [ -f "$file" ]; then
+      echo "[runner] WARNING: $file was modified! Restoring from git..."
+      git checkout HEAD -- "$file" 2>/dev/null || git restore "$file" 2>/dev/null || true
+      echo "[runner] Restored $file to original state"
+    fi
+  done
+fi
+
+# Restore write permissions after checking (in case we need to commit other changes)
+for file in "${PROTECTED_FILES[@]}"; do
+  if [ -e "$file" ]; then
+    if [ -f "$file" ]; then
+      chmod u+w "$file" 2>/dev/null || true
+    elif [ -d "$file" ]; then
+      find "$file" -type f -exec chmod u+w {} \; 2>/dev/null || true
+    fi
+  fi
+done
 
 echo "[runner] Aider session completed."
 
