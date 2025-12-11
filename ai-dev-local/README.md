@@ -48,10 +48,15 @@ cp k8s/secrets.env.example k8s/secrets.env
   - `JIRA_TOKEN`: Jira API token
   - `OPENAI_API_KEY`: API key with access to the desired OpenAI model (used by Aider)
   - `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DB`: credentials for the MySQL state store (defaults for `MYSQL_HOST`/`MYSQL_PORT` are `127.0.0.1:3306`, but you can override them as needed)
+  - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`: credentials for the S3/MinIO bucket storing Aider transcripts
+  - `S3_ENDPOINT_URL`: S3-compatible endpoint (e.g., `http://127.0.0.1:9000` when using MinIO)
+  - `AIDER_SESSION_BUCKET`: bucket name (e.g., `aider-sessions`)
+  - `AIDER_SESSION_PREFIX`: key prefix within the bucket (e.g., `sessions/`)
 - **Optional overrides:**
   - `REPO_URL`: Fallback repository URL if the Jira ticket does not specify one (the flow now prefers URLs embedded in the Jira description)
   - `AIDER_MODEL` (optional): Override the default model (defaults to `openai/gpt-4o-mini`). Run `aider --list-models openai/` to discover what your key can access.
   - `POST_RUN_COMMAND` (optional): Shell command to execute after Aider succeeds (e.g., `npm test` or `pytest`)
+  - `AWS_REGION`: Defaults to `us-east-1` if omitted
 
 > **Tip:** Aider requires an initialized git repository. The runner automatically creates one if missing and ignores `.aider*` artifacts.
 
@@ -89,7 +94,24 @@ docker build -t cursor-runner:local ./runner #done
 kind load docker-image cursor-runner:local --name dev-ai #done
 ```
 
-### 7. Apply Kubernetes Resources
+### 7. Start MinIO (S3-Compatible Session Store)
+
+The runner persists its entire Aider transcript to an S3 bucket so reviewer feedback loops keep full context. Locally we run MinIO:
+
+```bash
+cd ai-dev-local
+docker compose -f minio/docker-compose.yaml up -d
+```
+
+Open http://127.0.0.1:9001 to access the MinIO console (default credentials are defined in `minio/docker-compose.yaml`). Create the bucket that stores chat history (you can rename it, but keep `k8s/secrets.env` in sync):
+
+```bash
+export AWS_ACCESS_KEY_ID=aideradmin
+export AWS_SECRET_ACCESS_KEY=aidersecret
+aws --endpoint-url http://127.0.0.1:9000 s3 mb s3://aider-sessions
+```
+
+### 8. Apply Kubernetes Resources
 
 Create the namespace, RBAC, secrets, and ConfigMaps:
 
@@ -108,6 +130,16 @@ kubectl apply -f k8s/configmap-mcp.yaml #done
 
 ## Usage
 
+### Bootstrap Everything (Recommended)
+
+The repo now ships with a Python CLI that prepares the entire environment (venv, Prefect server, Kubernetes resources, secrets, MySQL schema, MinIO bucket, and Prefect deployments):
+
+```bash
+python tools/bootstrap.py up
+```
+
+The command is idempotent and safe to re-run whenever credentials change. It will also verify that your configured `AIDER_SESSION_BUCKET` exists (creating it on MinIO when possible).
+
 ### Start Prefect Server (Optional)
 
 For UI monitoring:
@@ -120,7 +152,7 @@ The Prefect UI will be available at `http://127.0.0.1:4200`
 
 ### Run the Flow
 
-Execute the Prefect flow:
+You can still execute flows manually (useful for debugging a single run):
 
 ```bash
 # Make sure your virtual environment is activated

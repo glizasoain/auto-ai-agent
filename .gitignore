@@ -1,0 +1,7 @@
+ai-dev-local/minio/data/
+ai-dev-local/venv/
+auto-ai-poc/
+venv/
+__pycache__/
+ai-dev-local/.bootstrap/
+

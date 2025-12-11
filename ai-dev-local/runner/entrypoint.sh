@@ -17,6 +17,11 @@ fi
 git clone "https://x-access-token:${GH_TOKEN}@${REPO_URL#https://}" repo
 cd repo
 
+REPO_SLUG=${REPO_URL#https://github.com/}
+REPO_SLUG=${REPO_SLUG%.git}
+REPO_OWNER=${REPO_SLUG%%/*}
+export REPO_SLUG
+
 ISSUE_KEY=${ISSUE_KEY:-"UNKNOWN"}
 ISSUE_SUMMARY=${ISSUE_SUMMARY:-"No summary provided"}
 EXISTING_PR_NUMBER=${PR_NUMBER:-""}
@@ -25,6 +30,121 @@ slugify() {
   local text
   text=$(echo "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed -E 's/^-+//; s/-+$//')
   echo "${text:0:40}"
+}
+
+SESSION_BUCKET=${AIDER_SESSION_BUCKET:-}
+SESSION_PREFIX_RAW=${AIDER_SESSION_PREFIX:-sessions/}
+S3_ENDPOINT=${S3_ENDPOINT_URL:-}
+PERSIST_SESSION=false
+AWS_S3_ARGS=()
+SESSION_FILE=""
+SESSION_URI=""
+SESSION_FINALIZED=false
+
+if [ -n "$SESSION_BUCKET" ] && [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ]; then
+  PERSIST_SESSION=true
+else
+  echo "[runner] Session persistence disabled; set AIDER_SESSION_BUCKET and AWS credentials to enable it."
+fi
+
+if [ -n "$S3_ENDPOINT" ]; then
+  AWS_S3_ARGS+=(--endpoint-url "$S3_ENDPOINT")
+fi
+
+if [ -n "${AWS_REGION:-}" ] && [ -z "${AWS_DEFAULT_REGION:-}" ]; then
+  export AWS_DEFAULT_REGION="${AWS_REGION}"
+elif [ -z "${AWS_DEFAULT_REGION:-}" ]; then
+  export AWS_DEFAULT_REGION="us-east-1"
+fi
+
+SESSION_PREFIX=${SESSION_PREFIX_RAW#/}
+if [ -n "$SESSION_PREFIX" ] && [ "${SESSION_PREFIX: -1}" != "/" ]; then
+  SESSION_PREFIX="${SESSION_PREFIX}/"
+fi
+
+sanitize_session_component() {
+  local value="$1"
+  value=$(echo "$value" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed -E 's/^-+//; s/-+$//')
+  echo "${value:-session}"
+}
+
+current_pr_url() {
+  if [ -n "${FINAL_PR_URL:-}" ]; then
+    echo "${FINAL_PR_URL}"
+  elif [ -n "${PR_NUMBER:-}" ] && [ -n "${REPO_SLUG:-}" ]; then
+    echo "https://github.com/${REPO_SLUG}/pull/${PR_NUMBER}"
+  elif [ -n "${EXISTING_PR_NUMBER:-}" ] && [ -n "${REPO_SLUG:-}" ]; then
+    echo "https://github.com/${REPO_SLUG}/pull/${EXISTING_PR_NUMBER}"
+  else
+    echo "pending"
+  fi
+}
+
+session_metadata_block() {
+  cat <<EOF
+# === Session Metadata ===
+# Issue: ${ISSUE_KEY}
+# Summary: ${ISSUE_SUMMARY}
+# Branch: ${BRANCH_NAME}
+# PR: $1
+# Last Updated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# === End Metadata ===
+
+EOF
+}
+
+strip_existing_metadata() {
+  if [ ! -f "${SESSION_FILE}" ]; then
+    return
+  fi
+  awk 'BEGIN{skip=0}
+       /^# === Session Metadata ===$/{skip=1; next}
+       /^# === End Metadata ===$/{skip=0; next}
+       { if (skip==0) print }
+      ' "${SESSION_FILE}"
+}
+
+prepare_session_persistence() {
+  if [ "${PERSIST_SESSION}" != "true" ]; then
+    return
+  fi
+  local key
+  key=$(sanitize_session_component "${ISSUE_KEY}-${BRANCH_NAME}")
+  SESSION_FILE="/tmp/aider-session-${key}.md"
+  if [ -n "${SESSION_PREFIX}" ]; then
+    SESSION_URI="s3://${SESSION_BUCKET}/${SESSION_PREFIX}${key}.md"
+  else
+    SESSION_URI="s3://${SESSION_BUCKET}/${key}.md"
+  fi
+  rm -f "${SESSION_FILE}"
+  if aws s3 cp "${SESSION_URI}" "${SESSION_FILE}" "${AWS_S3_ARGS[@]}" --quiet 2>/dev/null; then
+    echo "[runner] Restored Aider transcript from ${SESSION_URI}"
+  else
+    session_metadata_block "$(current_pr_url)" > "${SESSION_FILE}"
+    echo "[runner] Initialized new Aider transcript at ${SESSION_URI}"
+  fi
+}
+
+persist_session_transcript() {
+  local cleanup="${1:-false}"
+  if [ "${PERSIST_SESSION}" != "true" ] || [ -z "${SESSION_FILE}" ] || [ ! -f "${SESSION_FILE}" ]; then
+    return
+  fi
+  local body_tmp
+  body_tmp=$(mktemp)
+  strip_existing_metadata > "${body_tmp}"
+  session_metadata_block "$(current_pr_url)" > "${SESSION_FILE}"
+  cat "${body_tmp}" >> "${SESSION_FILE}"
+  rm -f "${body_tmp}"
+  if aws s3 cp "${SESSION_FILE}" "${SESSION_URI}" "${AWS_S3_ARGS[@]}" --quiet; then
+    echo "[runner] Uploaded transcript to ${SESSION_URI}"
+  else
+    echo "[runner] WARNING: Failed to upload transcript to ${SESSION_URI}"
+  fi
+  if [ "${cleanup}" = "true" ]; then
+    SESSION_FINALIZED=true
+    rm -f "${SESSION_FILE}"
+  fi
 }
 
 BASE_BRANCH=${BASE_BRANCH:-"main"}
@@ -50,7 +170,45 @@ else
   git checkout -B "${BRANCH_NAME}" "origin/${BASE_BRANCH}"
 fi
 
-RUN_PROMPT="Work on Jira issue ${ISSUE_KEY}: ${ISSUE_SUMMARY}. Follow .cursor/rules (and guardrails.yaml), implement the necessary changes, add/modify tests, run tests, summarize work, and prepare a PR body linking the Jira issue. Branch to ${BRANCH_NAME}."
+if [ "${PERSIST_SESSION}" = "true" ]; then
+  prepare_session_persistence
+  trap 'if [ "${PERSIST_SESSION}" = "true" ] && [ "${SESSION_FINALIZED}" != "true" ]; then persist_session_transcript true; fi' EXIT
+fi
+
+# Check if REVIEW_FEEDBACK is set (indicates this is a follow-up run for PR review feedback)
+if [ -n "${REVIEW_FEEDBACK:-}" ]; then
+  echo "[runner] REVIEW_FEEDBACK is set (length: ${#REVIEW_FEEDBACK} chars)"
+  echo "[runner] REVIEW_FEEDBACK preview: ${REVIEW_FEEDBACK:0:200}..."
+  
+  # Layer 1: Make review feedback the PRIMARY instruction with strong emphasis
+  RUN_PROMPT="🚨 CRITICAL: This is a follow-up run to address reviewer feedback. A reviewer has requested specific changes to this PR.
+
+═══════════════════════════════════════════════════════════════
+REVIEWER'S REQUESTS (YOU MUST ADDRESS THESE - HIGHEST PRIORITY):
+═══════════════════════════════════════════════════════════════
+${REVIEW_FEEDBACK}
+═══════════════════════════════════════════════════════════════
+
+Your task:
+1. Read and understand the reviewer's requests above
+2. Implement ONLY the changes requested by the reviewer
+3. DO NOT modify guardrails.yaml or .cursor/rules files under any circumstances
+4. DO NOT work on the original Jira issue unless it's explicitly part of the reviewer's feedback
+5. Focus exclusively on addressing the reviewer's feedback above
+
+Original context (for reference only):
+- Jira Issue: ${ISSUE_KEY}
+- Summary: ${ISSUE_SUMMARY}
+- Branch: ${BRANCH_NAME}
+
+Follow coding standards from .cursor/rules and guardrails.yaml, but DO NOT edit those files."
+  echo "[runner] Injected reviewer feedback as PRIMARY instruction."
+else
+  # Original prompt for new work (no review feedback)
+  RUN_PROMPT="Work on Jira issue ${ISSUE_KEY}: ${ISSUE_SUMMARY}. Follow .cursor/rules (and guardrails.yaml), implement the necessary changes, add/modify tests, run tests, summarize work, and prepare a PR body linking the Jira issue. Branch to ${BRANCH_NAME}."
+  echo "[runner] WARNING: REVIEW_FEEDBACK is NOT set in environment"
+  echo "[runner] Available env vars starting with REVIEW: $(env | grep -i review || echo 'none')"
+fi
 
 echo "[runner] Launching aider with prompt:"
 echo "${RUN_PROMPT}"
@@ -64,13 +222,25 @@ if ! command -v aider >/dev/null 2>&1; then
   exit 1
 fi
 
+SESSION_FLAGS=()
+if [ "${PERSIST_SESSION}" = "true" ]; then
+  SESSION_FLAGS+=(--restore "${SESSION_FILE}" --save "${SESSION_FILE}")
+fi
+
+# Layer 4: Use Aider's --exclude to prevent editing guardrails and rules files
 aider \
   --model "${DEFAULT_MODEL}" \
+  "${SESSION_FLAGS[@]}" \
   --no-check-update \
   --yes \
+  --exclude "guardrails.yaml" \
+  --exclude ".cursor/rules/**" \
+  --exclude ".cursor/**" \
   --message "${RUN_PROMPT}"
 
 echo "[runner] Aider session completed."
+
+persist_session_transcript false
 
 if [ -n "${POST_RUN_COMMAND:-}" ]; then
   echo "[runner] Running post-run command: ${POST_RUN_COMMAND}"
@@ -87,11 +257,6 @@ fi
 
 git push -u origin "${BRANCH_NAME}"
 echo "[runner] Branch ${BRANCH_NAME} pushed to origin."
-
-REPO_SLUG=${REPO_URL#https://github.com/}
-REPO_SLUG=${REPO_SLUG%.git}
-REPO_OWNER=${REPO_SLUG%%/*}
-export REPO_SLUG
 
 FINAL_PR_NUMBER=""
 FINAL_PR_URL=""
@@ -174,6 +339,8 @@ print(json.dumps(result))
 PY
 )
 echo "::runner-result::${RUNNER_RESULT}"
+
+persist_session_transcript true
 
 echo "[runner] Completed successfully."
 

@@ -6,8 +6,15 @@ alwaysApply: true
 - Only work on Jira issues labeled AI_ALLOWED and Ready for Dev.
 - Branch name: ai/@{issueKey}-@{slug}
 - Forbidden directories: infra/**, secrets/**
+- Forbidden files: guardrails.yaml, .cursor/rules/**, .cursor/**
 - Must add/modify tests.
 - Must pass all tests before PR creation.
+
+# Critical: When responding to PR review feedback
+- Reviewer feedback takes ABSOLUTE PRIORITY over original Jira issue
+- DO NOT modify guardrails.yaml or .cursor/rules files under any circumstances
+- Focus ONLY on the specific changes requested by the reviewer
+- Ignore the original Jira issue description if it conflicts with reviewer feedback
 
 # Steps
 1) Read ticket and acceptance criteria.

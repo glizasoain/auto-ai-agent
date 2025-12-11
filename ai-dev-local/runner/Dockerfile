@@ -1,6 +1,6 @@
 FROM node:20-bullseye
 
-RUN apt-get update && apt-get install -y git curl bash ca-certificates python3 python3-pip && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y git curl bash ca-certificates python3 python3-pip awscli && rm -rf /var/lib/apt/lists/*
 
 # Install aider (Python-based CLI code assistant)
 RUN pip3 install --no-cache-dir aider-chat
