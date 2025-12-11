@@ -175,7 +175,9 @@ if [ "${PERSIST_SESSION}" = "true" ]; then
   trap 'if [ "${PERSIST_SESSION}" = "true" ] && [ "${SESSION_FINALIZED}" != "true" ]; then persist_session_transcript true; fi' EXIT
 fi
 
-# Check if REVIEW_FEEDBACK is set (indicates this is a follow-up run for PR review feedback)
+# Debug: Check REVIEW_FEEDBACK before using it
+echo "[runner] Checking for REVIEW_FEEDBACK environment variable..."
+echo "[runner] All env vars containing 'REVIEW': $(env | grep -i review || echo 'NONE FOUND')"
 if [ -n "${REVIEW_FEEDBACK:-}" ]; then
   echo "[runner] REVIEW_FEEDBACK is set (length: ${#REVIEW_FEEDBACK} chars)"
   echo "[runner] REVIEW_FEEDBACK preview: ${REVIEW_FEEDBACK:0:200}..."
