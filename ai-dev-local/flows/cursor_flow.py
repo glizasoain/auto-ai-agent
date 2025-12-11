@@ -627,8 +627,9 @@ def monitor_pull_requests(runner_image: str = "cursor-runner:local", monitor_lim
         log.warning("GH_TOKEN not set; skipping PR monitoring.")
         return
 
+    # Check runs in review, changes requested, and also failed (in case job failed but PR still has change requests)
     runs = db_utils.get_runs_by_status(
-        [db_utils.STATUS_IN_REVIEW, db_utils.STATUS_CHANGES_REQUESTED],
+        [db_utils.STATUS_IN_REVIEW, db_utils.STATUS_CHANGES_REQUESTED, db_utils.STATUS_FAILED],
         limit=monitor_limit,
     )
     if not runs:
@@ -666,9 +667,11 @@ def monitor_pull_requests(runner_image: str = "cursor-runner:local", monitor_lim
             current_review_id = latest_review["id"]
             current_review_submitted_at = latest_review.get("submitted_at") or ""
             
-            # Trigger if: review ID changed OR (same ID but newer timestamp) OR status changed to CHANGES_REQUESTED
+            # If status is FAILED, always trigger (recovery from transient failure)
+            # Otherwise, trigger if: review ID changed OR (same ID but newer timestamp) OR status changed to CHANGES_REQUESTED
             is_new_review = (
-                last_seen_review != current_review_id
+                run["status"] == db_utils.STATUS_FAILED
+                or last_seen_review != current_review_id
                 or (last_seen_review == current_review_id and current_review_submitted_at > (last_review_submitted_at or ""))
                 or metadata.get("last_review_state") != "CHANGES_REQUESTED"
             )
