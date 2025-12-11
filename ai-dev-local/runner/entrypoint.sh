@@ -262,30 +262,37 @@ FINAL_PR_NUMBER=""
 FINAL_PR_URL=""
 
 echo "[runner] Checking for existing PR..."
+# Temporarily disable exit on error for PR operations (they're not critical for job success)
+set +e
 existing_pr=$(curl -sS \
   -H "Authorization: token ${GH_TOKEN}" \
   -H "Accept: application/vnd.github+json" \
-  "https://api.github.com/repos/${REPO_SLUG}/pulls?head=${REPO_OWNER}:${BRANCH_NAME}")
+  "https://api.github.com/repos/${REPO_SLUG}/pulls?head=${REPO_OWNER}:${BRANCH_NAME}" 2>&1)
+curl_exit_code=$?
 
-existing_summary=$(printf '%s\n' "${existing_pr}" | python3 - <<'PY'
+if [ $curl_exit_code -ne 0 ]; then
+  echo "[runner] Warning: Failed to check for existing PR (curl exit code: $curl_exit_code)"
+  echo "[runner] Response: ${existing_pr}"
+else
+  existing_summary=$(printf '%s\n' "${existing_pr}" | python3 - <<'PY'
 import json, sys
 try:
     data = json.load(sys.stdin)
-except json.JSONDecodeError:
+except (json.JSONDecodeError, ValueError):
     sys.exit(0)
 if not isinstance(data, list) or not data:
     sys.exit(0)
 pr = data[0]
 print(f"{pr['number']} {pr['html_url']}")
 PY
-)
+  )
 
-if [ -n "${existing_summary}" ]; then
-  FINAL_PR_NUMBER=$(echo "${existing_summary}" | awk '{print $1}')
-  FINAL_PR_URL=$(echo "${existing_summary}" | awk '{print $2}')
-  echo "[runner] PR already exists for ${BRANCH_NAME}: ${FINAL_PR_URL}"
-else
-  PR_PAYLOAD=$(python3 - <<'PY'
+  if [ -n "${existing_summary}" ]; then
+    FINAL_PR_NUMBER=$(echo "${existing_summary}" | awk '{print $1}')
+    FINAL_PR_URL=$(echo "${existing_summary}" | awk '{print $2}')
+    echo "[runner] PR already exists for ${BRANCH_NAME}: ${FINAL_PR_URL}"
+  else
+    PR_PAYLOAD=$(python3 - <<'PY'
 import json, os
 title = f"AI work for {os.environ.get('ISSUE_KEY', 'UNKNOWN')}: {os.environ.get('ISSUE_SUMMARY', 'No summary provided')}"
 body = """## Summary
@@ -303,42 +310,72 @@ payload = {
 }
 print(json.dumps(payload))
 PY
-)
+    )
 
-  echo "[runner] Creating draft PR targeting ${BASE_BRANCH}..."
-  response=$(curl -sS -X POST \
-    -H "Authorization: token ${GH_TOKEN}" \
-    -H "Accept: application/vnd.github+json" \
-    https://api.github.com/repos/${REPO_SLUG}/pulls \
-    -d "${PR_PAYLOAD}")
+    echo "[runner] Creating draft PR targeting ${BASE_BRANCH}..."
+    response=$(curl -sS -X POST \
+      -H "Authorization: token ${GH_TOKEN}" \
+      -H "Accept: application/vnd.github+json" \
+      https://api.github.com/repos/${REPO_SLUG}/pulls \
+      -d "${PR_PAYLOAD}" 2>&1)
+    create_curl_exit_code=$?
 
-  if echo "${response}" | grep -q '"html_url"'; then
-    FINAL_PR_NUMBER=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin)['number'])")
-    FINAL_PR_URL=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin)['html_url'])")
-    echo "[runner] Draft PR created: ${FINAL_PR_URL}"
-  else
-    echo "[runner] Failed to create PR. Response:"
-    echo "${response}"
+    if [ $create_curl_exit_code -eq 0 ] && echo "${response}" | grep -q '"html_url"'; then
+      FINAL_PR_NUMBER=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin)['number'])" 2>/dev/null)
+      FINAL_PR_URL=$(echo "${response}" | python3 -c "import sys, json; print(json.load(sys.stdin)['html_url'])" 2>/dev/null)
+      if [ -n "${FINAL_PR_NUMBER}" ] && [ -n "${FINAL_PR_URL}" ]; then
+        echo "[runner] Draft PR created: ${FINAL_PR_URL}"
+      else
+        echo "[runner] Warning: PR may have been created but failed to parse response"
+        echo "[runner] Response: ${response}"
+      fi
+    else
+      echo "[runner] Warning: Failed to create PR (curl exit code: ${create_curl_exit_code})"
+      echo "[runner] Response: ${response}"
+    fi
   fi
 fi
+# Re-enable exit on error
+set -e
 
+# Generate runner result (allow this to fail gracefully)
+set +e
 RUNNER_RESULT=$(python3 - <<'PY'
-import json, os
-result = {
-    "issue_key": os.environ.get("ISSUE_KEY", "UNKNOWN"),
-    "branch_name": os.environ.get("BRANCH_NAME"),
-    "repo_slug": os.environ.get("REPO_SLUG"),
-}
-pr_number = os.environ.get("FINAL_PR_NUMBER")
-pr_url = os.environ.get("FINAL_PR_URL")
-if pr_number:
-    result["pr_number"] = int(pr_number)
-if pr_url:
-    result["pr_url"] = pr_url
-print(json.dumps(result))
+import json, os, sys
+try:
+    result = {
+        "issue_key": os.environ.get("ISSUE_KEY", "UNKNOWN"),
+        "branch_name": os.environ.get("BRANCH_NAME"),
+        "repo_slug": os.environ.get("REPO_SLUG"),
+    }
+    pr_number = os.environ.get("FINAL_PR_NUMBER", "").strip()
+    pr_url = os.environ.get("FINAL_PR_URL", "").strip()
+    if pr_number:
+        try:
+            result["pr_number"] = int(pr_number)
+        except ValueError:
+            pass
+    if pr_url:
+        result["pr_url"] = pr_url
+    print(json.dumps(result))
+except Exception as e:
+    # Fallback: at least output basic info
+    print(json.dumps({
+        "issue_key": os.environ.get("ISSUE_KEY", "UNKNOWN"),
+        "branch_name": os.environ.get("BRANCH_NAME", ""),
+        "error": str(e)
+    }))
 PY
 )
-echo "::runner-result::${RUNNER_RESULT}"
+result_exit_code=$?
+set -e
+
+if [ $result_exit_code -eq 0 ] && [ -n "${RUNNER_RESULT}" ]; then
+  echo "::runner-result::${RUNNER_RESULT}"
+else
+  echo "[runner] Warning: Failed to generate runner result, but work was completed"
+  echo "::runner-result::{\"issue_key\":\"${ISSUE_KEY}\",\"branch_name\":\"${BRANCH_NAME}\"}"
+fi
 
 persist_session_transcript true
 
