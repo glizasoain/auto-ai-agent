@@ -627,9 +627,9 @@ def monitor_pull_requests(runner_image: str = "cursor-runner:local", monitor_lim
         log.warning("GH_TOKEN not set; skipping PR monitoring.")
         return
 
-    # Check runs in review, changes requested, and also failed (in case job failed but PR still has change requests)
+    # Check runs in review, changes requested, failed, and in_progress (in case job failed/didn't commit but PR still has change requests)
     runs = db_utils.get_runs_by_status(
-        [db_utils.STATUS_IN_REVIEW, db_utils.STATUS_CHANGES_REQUESTED, db_utils.STATUS_FAILED],
+        [db_utils.STATUS_IN_REVIEW, db_utils.STATUS_CHANGES_REQUESTED, db_utils.STATUS_FAILED, db_utils.STATUS_IN_PROGRESS],
         limit=monitor_limit,
     )
     if not runs:
