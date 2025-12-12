@@ -667,10 +667,11 @@ def monitor_pull_requests(runner_image: str = "cursor-runner:local", monitor_lim
             current_review_id = latest_review["id"]
             current_review_submitted_at = latest_review.get("submitted_at") or ""
             
-            # If status is FAILED, always trigger (recovery from transient failure)
+            # If status is FAILED or IN_PROGRESS, always trigger (recovery from failure or retry after no commit)
             # Otherwise, trigger if: review ID changed OR (same ID but newer timestamp) OR status changed to CHANGES_REQUESTED
             is_new_review = (
                 run["status"] == db_utils.STATUS_FAILED
+                or run["status"] == db_utils.STATUS_IN_PROGRESS
                 or last_seen_review != current_review_id
                 or (last_seen_review == current_review_id and current_review_submitted_at > (last_review_submitted_at or ""))
                 or metadata.get("last_review_state") != "CHANGES_REQUESTED"
