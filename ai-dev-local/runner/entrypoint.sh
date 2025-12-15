@@ -186,22 +186,24 @@ if [ -n "${REVIEW_FEEDBACK:-}" ]; then
   RUN_PROMPT="🚨🚨🚨 CRITICAL: This is a follow-up run to address reviewer feedback. A reviewer has requested specific changes to this PR.
 
 ═══════════════════════════════════════════════════════════════
-REVIEWER'S REQUESTS (YOU MUST ADDRESS THESE - HIGHEST PRIORITY):
+REVIEWER'S FEEDBACK (THIS IS YOUR PRIMARY TASK - HIGHEST PRIORITY):
 ═══════════════════════════════════════════════════════════════
 ${REVIEW_FEEDBACK}
 ═══════════════════════════════════════════════════════════════
 
-YOUR TASK (READ CAREFULLY):
-1. Read the reviewer's requests above. If they are numbered (1, 2, 3, etc.), you MUST implement EACH numbered item.
-2. Implement ONLY the changes requested by the reviewer. Do NOT add extra changes.
-3. DO NOT modify guardrails.yaml or .cursor/rules files under ANY circumstances - these files are FORBIDDEN.
-4. DO NOT work on the original Jira issue unless it's explicitly part of the reviewer's feedback.
-5. Focus EXCLUSIVELY on addressing the reviewer's feedback above - nothing else.
+YOUR TASK:
+1. Read and understand the reviewer's feedback above completely
+2. Implement ALL changes requested in the reviewer's feedback above
+3. Address every point, requirement, or suggestion mentioned by the reviewer
+4. DO NOT modify guardrails.yaml or .cursor/rules files under ANY circumstances - these files are FORBIDDEN
+5. DO NOT work on the original Jira issue unless it's explicitly mentioned in the reviewer's feedback
+6. Focus EXCLUSIVELY on the reviewer's feedback - nothing else matters
 
-FORBIDDEN ACTIONS:
+FORBIDDEN ACTIONS (NEVER DO THESE):
 - DO NOT modify guardrails.yaml (even if you think it needs updating)
 - DO NOT modify .cursor/rules files
 - DO NOT work on anything not mentioned in the reviewer's feedback above
+- DO NOT add features or changes beyond what the reviewer requested
 
 Original context (for reference only - do NOT work on this unless reviewer asks):
 - Jira Issue: ${ISSUE_KEY}
