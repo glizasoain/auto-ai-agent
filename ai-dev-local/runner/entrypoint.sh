@@ -183,7 +183,7 @@ if [ -n "${REVIEW_FEEDBACK:-}" ]; then
   echo "[runner] REVIEW_FEEDBACK preview: ${REVIEW_FEEDBACK:0:200}..."
   
   # Layer 1: Make review feedback the PRIMARY instruction with strong emphasis
-  RUN_PROMPT="🚨 CRITICAL: This is a follow-up run to address reviewer feedback. A reviewer has requested specific changes to this PR.
+  RUN_PROMPT="🚨🚨🚨 CRITICAL: This is a follow-up run to address reviewer feedback. A reviewer has requested specific changes to this PR.
 
 ═══════════════════════════════════════════════════════════════
 REVIEWER'S REQUESTS (YOU MUST ADDRESS THESE - HIGHEST PRIORITY):
@@ -191,14 +191,19 @@ REVIEWER'S REQUESTS (YOU MUST ADDRESS THESE - HIGHEST PRIORITY):
 ${REVIEW_FEEDBACK}
 ═══════════════════════════════════════════════════════════════
 
-Your task:
-1. Read and understand the reviewer's requests above
-2. Implement ONLY the changes requested by the reviewer
-3. DO NOT modify guardrails.yaml or .cursor/rules files under any circumstances
-4. DO NOT work on the original Jira issue unless it's explicitly part of the reviewer's feedback
-5. Focus exclusively on addressing the reviewer's feedback above
+YOUR TASK (READ CAREFULLY):
+1. Read the reviewer's requests above. If they are numbered (1, 2, 3, etc.), you MUST implement EACH numbered item.
+2. Implement ONLY the changes requested by the reviewer. Do NOT add extra changes.
+3. DO NOT modify guardrails.yaml or .cursor/rules files under ANY circumstances - these files are FORBIDDEN.
+4. DO NOT work on the original Jira issue unless it's explicitly part of the reviewer's feedback.
+5. Focus EXCLUSIVELY on addressing the reviewer's feedback above - nothing else.
 
-Original context (for reference only):
+FORBIDDEN ACTIONS:
+- DO NOT modify guardrails.yaml (even if you think it needs updating)
+- DO NOT modify .cursor/rules files
+- DO NOT work on anything not mentioned in the reviewer's feedback above
+
+Original context (for reference only - do NOT work on this unless reviewer asks):
 - Jira Issue: ${ISSUE_KEY}
 - Summary: ${ISSUE_SUMMARY}
 - Branch: ${BRANCH_NAME}
@@ -307,7 +312,48 @@ if [ -n "${POST_RUN_COMMAND:-}" ]; then
   bash -lc "${POST_RUN_COMMAND}"
 fi
 
+# CRITICAL: Remove guardrails.yaml and .cursor files from staging before committing
+echo "[runner] Ensuring guardrails.yaml and .cursor files are NOT in commits..."
+git reset HEAD "guardrails.yaml" 2>/dev/null || true
+git reset HEAD ".cursor" 2>/dev/null || true
+git restore --staged "guardrails.yaml" 2>/dev/null || true
+git restore --staged ".cursor" 2>/dev/null || true
+
+# Check if guardrails.yaml is in the last commit(s) and remove it
+LAST_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "")
+if [ -n "${LAST_COMMIT}" ] && [ "${LAST_COMMIT}" != "$(git rev-parse origin/${BRANCH_NAME} 2>/dev/null || echo '')" ]; then
+  # Check if guardrails.yaml was modified in the last commit
+  if git diff-tree --no-commit-id --name-only -r HEAD | grep -q "^guardrails.yaml$"; then
+    echo "[runner] ERROR: guardrails.yaml was committed! Removing from commit..."
+    # Reset to before the last commit, restore guardrails.yaml, and recommit without it
+    git reset --soft HEAD~1 2>/dev/null || git reset HEAD~1 2>/dev/null || true
+    git checkout HEAD -- "guardrails.yaml" 2>/dev/null || git restore "guardrails.yaml" 2>/dev/null || true
+    git restore --staged "guardrails.yaml" 2>/dev/null || true
+    echo "[runner] Removed guardrails.yaml from commit. Re-staging other changes..."
+    git add -A
+    git reset HEAD "guardrails.yaml" 2>/dev/null || true
+    git restore --staged "guardrails.yaml" 2>/dev/null || true
+  fi
+  # Check .cursor files
+  if git diff-tree --no-commit-id --name-only -r HEAD | grep -q "^\.cursor/"; then
+    echo "[runner] ERROR: .cursor files were committed! Removing from commit..."
+    git reset --soft HEAD~1 2>/dev/null || git reset HEAD~1 2>/dev/null || true
+    git checkout HEAD -- ".cursor" 2>/dev/null || git restore ".cursor" 2>/dev/null || true
+    git restore --staged ".cursor" 2>/dev/null || true
+    echo "[runner] Removed .cursor files from commit. Re-staging other changes..."
+    git add -A
+    git reset HEAD ".cursor" 2>/dev/null || true
+    git restore --staged ".cursor" 2>/dev/null || true
+  fi
+fi
+
 git add -A
+# Remove guardrails.yaml and .cursor from staging again (in case they were added)
+git reset HEAD "guardrails.yaml" 2>/dev/null || true
+git reset HEAD ".cursor" 2>/dev/null || true
+git restore --staged "guardrails.yaml" 2>/dev/null || true
+git restore --staged ".cursor" 2>/dev/null || true
+
 if git diff --cached --quiet; then
   echo "[runner] No newly staged changes; assuming Aider already committed."
 else
